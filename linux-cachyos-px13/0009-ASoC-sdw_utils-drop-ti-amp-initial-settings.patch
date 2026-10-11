@@ -1,0 +1,76 @@
+From df23cf73a31adf3f79bebe754bc67f6cc09863c1 Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:43:51 +0200
+Subject: [PATCH 09/19] ASoC: sdw_utils: drop
+ asoc_sdw_ti_amp_initial_settings() - Speaker Playback Volume is already
+ TLV-limited by SOC_SINGLE_RANGE_TLV
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ include/sound/soc_sdw_utils.h        |  2 --
+ sound/soc/sdw_utils/soc_sdw_ti_amp.c | 27 ---------------------------
+ 2 files changed, 29 deletions(-)
+
+diff --git a/include/sound/soc_sdw_utils.h b/include/sound/soc_sdw_utils.h
+index 9b28e9aef..bc8ea4340 100644
+--- a/include/sound/soc_sdw_utils.h
++++ b/include/sound/soc_sdw_utils.h
+@@ -286,8 +286,6 @@ int asoc_sdw_ti_amp_init(struct snd_soc_card *card,
+ int asoc_sdw_ti_spk_rtd_init(struct snd_soc_pcm_runtime *rtd, struct snd_soc_dai *dai);
+ int asoc_sdw_ti_tac5xx2_spk_rtd_init(struct snd_soc_pcm_runtime *rtd,
+ 				     struct snd_soc_dai *dai);
+-int asoc_sdw_ti_amp_initial_settings(struct snd_soc_card *card,
+-				     const char *name_prefix);
+ int asoc_sdw_ti_dmic_rtd_init(struct snd_soc_pcm_runtime *rtd, struct snd_soc_dai *dai);
+ int asoc_sdw_ti_sdca_jack_rtd_init(struct snd_soc_pcm_runtime *rtd, struct snd_soc_dai *dai);
+ int asoc_sdw_es9356_rtd_init(struct snd_soc_pcm_runtime *rtd, struct snd_soc_dai *dai);
+diff --git a/sound/soc/sdw_utils/soc_sdw_ti_amp.c b/sound/soc/sdw_utils/soc_sdw_ti_amp.c
+index d0ae5d7ef..3356bae1d 100644
+--- a/sound/soc/sdw_utils/soc_sdw_ti_amp.c
++++ b/sound/soc/sdw_utils/soc_sdw_ti_amp.c
+@@ -14,32 +14,8 @@
+ #include <sound/soc.h>
+ #include <sound/soc_sdw_utils.h>
+ 
+-#define TIAMP_SPK_VOLUME_0DB		200
+ #define TAC5XX2_WIDGET_NAME_MAX		32
+ 
+-int asoc_sdw_ti_amp_initial_settings(struct snd_soc_card *card,
+-				     const char *name_prefix)
+-{
+-	char *volume_ctl_name;
+-	int ret;
+-
+-	volume_ctl_name = kasprintf(GFP_KERNEL, "%s Speaker Volume",
+-				    name_prefix);
+-	if (!volume_ctl_name)
+-		return -ENOMEM;
+-
+-	ret = snd_soc_limit_volume(card, volume_ctl_name,
+-				   TIAMP_SPK_VOLUME_0DB);
+-	if (ret)
+-		dev_err(card->dev,
+-			"%s update failed %d\n",
+-			volume_ctl_name, ret);
+-
+-	kfree(volume_ctl_name);
+-	return 0;
+-}
+-EXPORT_SYMBOL_NS(asoc_sdw_ti_amp_initial_settings, "SND_SOC_SDW_UTILS");
+-
+ int asoc_sdw_ti_spk_rtd_init(struct snd_soc_pcm_runtime *rtd,
+ 			     struct snd_soc_dai *dai)
+ {
+@@ -72,9 +48,6 @@ int asoc_sdw_ti_spk_rtd_init(struct snd_soc_pcm_runtime *rtd,
+ 		}
+ 
+ 		snprintf(widget_name, sizeof(widget_name), "%s SPK", prefix);
+-		ret = asoc_sdw_ti_amp_initial_settings(card, prefix);
+-		if (ret)
+-			return ret;
+ 
+ 		ret = snd_soc_dapm_add_routes(dapm, &route, 1);
+ 		if (ret)
+-- 
+2.56.0
+

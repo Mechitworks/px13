@@ -1,0 +1,161 @@
+From 3f2b692674d254e65dcde2265cf247bab83bb4a7 Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:46:17 +0200
+Subject: [PATCH 19/19] soundwire: amd: keep polling for slave re-attach after
+ a power-off resume
+
+On AMD s2idle the BIOS advertises amd-sdw-power-mode = POWER_OFF, so the
+bus is torn down and must re-enumerate. amd_resume_runtime() polled the
+ping status for ~4ms and, if the slaves had not reported ATTACHED by
+then, printed "No devices attached after resume timeout" and never
+scheduled amd_sdw_work. The bus then stayed un-enumerated for the rest
+of the session: codec workers timed out, TAS2783 firmware was never
+re-downloaded, and audio stayed dead until a reboot.
+
+Poll in process context from a dedicated worker for up to ~2.6s and
+always hand over to amd_sdw_work once the slaves answer. The inline
+window is kept so the common fast path is unchanged, and the worker is
+cancelled on suspend and remove so it cannot race a following suspend.
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ drivers/soundwire/amd_manager.c   | 66 +++++++++++++++++++++++++++++--
+ include/linux/soundwire/sdw_amd.h |  2 +
+ 2 files changed, 65 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/soundwire/amd_manager.c b/drivers/soundwire/amd_manager.c
+index f96364c9e..68bc3885d 100644
+--- a/drivers/soundwire/amd_manager.c
++++ b/drivers/soundwire/amd_manager.c
+@@ -25,6 +25,13 @@
+ 
+ #define DRV_NAME "amd_sdw_manager"
+ 
++/*
++ * Budget for the background re-attach poll after a power-off resume:
++ * AMD_SDW_RESUME_POLL_RETRIES * ~22ms ~= 2.6s, which stays under the
++ * codec-side RT721_PROBE_TIMEOUT / TAS2783_PROBE_TIMEOUT of 5s.
++ */
++#define AMD_SDW_RESUME_POLL_RETRIES	120
++
+ #define to_amd_sdw(b)	container_of(b, struct amd_sdw_manager, bus)
+ 
+ static int amd_sdw_clk_init_ctrl(struct amd_sdw_manager *amd_manager)
+@@ -966,6 +973,46 @@ static void amd_sdw_update_slave_status_work(struct work_struct *work)
+ 	}
+ }
+ 
++/*
++ * Slow re-attach path after a power-off resume.
++ *
++ * On AMD s2idle the BIOS advertises amd-sdw-power-mode = POWER_OFF, so the
++ * whole bus is torn down and has to re-enumerate. The slaves need a few
++ * hundred milliseconds to power up and answer the ping, which is longer than
++ * the short inline poll in amd_resume_runtime() can afford: that function runs
++ * inside dpm_resume, which is a barrier for the userspace thaw.
++ *
++ * Poll in process context instead, and always hand over to amd_sdw_work once
++ * the slaves answer - sdw_handle_slave_status() is what runs the codec
++ * update_status callbacks, and for TAS2783 that is what re-downloads the
++ * firmware via tas_io_init(). Giving up here leaves the bus un-enumerated for
++ * the rest of the session, which shows up as audio that stays dead until the
++ * next reboot.
++ */
++static void amd_sdw_resume_poll_work(struct work_struct *work)
++{
++	struct amd_sdw_manager *amd_manager =
++		container_of(work, struct amd_sdw_manager, resume_poll_work);
++	int retry = AMD_SDW_RESUME_POLL_RETRIES;
++
++	while (retry--) {
++		usleep_range(20000, 25000);
++		amd_sdw_read_and_process_ping_status(amd_manager);
++		if (amd_manager->status[0] == SDW_SLAVE_ATTACHED) {
++			dev_info(amd_manager->dev,
++				 "Devices detected after resume, link %d\n",
++				 amd_manager->bus.link_id);
++			schedule_work(&amd_manager->amd_sdw_work);
++			return;
++		}
++	}
++
++	dev_err(amd_manager->dev, "No devices attached after resume timeout\n");
++	amd_sdw_read_and_process_ping_status(amd_manager);
++	if (amd_manager->status[0] == SDW_SLAVE_ATTACHED)
++		schedule_work(&amd_manager->amd_sdw_work);
++}
++
+ static void amd_sdw_update_slave_status(u32 status_change_0to7, u32 status_change_8to11,
+ 					struct amd_sdw_manager *amd_manager)
+ {
+@@ -1146,6 +1193,7 @@ static int amd_sdw_manager_probe(struct platform_device *pdev)
+ 	dev_set_drvdata(dev, amd_manager);
+ 	INIT_WORK(&amd_manager->amd_sdw_irq_thread, amd_sdw_irq_thread);
+ 	INIT_WORK(&amd_manager->amd_sdw_work, amd_sdw_update_slave_status_work);
++	INIT_WORK(&amd_manager->resume_poll_work, amd_sdw_resume_poll_work);
+ 	return 0;
+ }
+ 
+@@ -1156,6 +1204,7 @@ static void amd_sdw_manager_remove(struct platform_device *pdev)
+ 
+ 	pm_runtime_disable(&pdev->dev);
+ 	cancel_work_sync(&amd_manager->amd_sdw_work);
++	cancel_work_sync(&amd_manager->resume_poll_work);
+ 	amd_disable_sdw_interrupts(amd_manager);
+ 	sdw_bus_master_delete(&amd_manager->bus);
+ 	ret = amd_disable_sdw_manager(amd_manager);
+@@ -1292,6 +1341,7 @@ static int __maybe_unused amd_suspend(struct device *dev)
+ 
+ 	if (amd_manager->power_mode_mask & AMD_SDW_CLK_STOP_MODE) {
+ 		cancel_work_sync(&amd_manager->amd_sdw_work);
++		cancel_work_sync(&amd_manager->resume_poll_work);
+ 		amd_sdw_wake_enable(amd_manager, false);
+ 		if (amd_manager->acp_rev >= ACP70_PCI_REV_ID) {
+ 			ret = amd_sdw_host_wake_enable(amd_manager, false);
+@@ -1303,6 +1353,7 @@ static int __maybe_unused amd_suspend(struct device *dev)
+ 			return ret;
+ 	} else if (amd_manager->power_mode_mask & AMD_SDW_POWER_OFF_MODE) {
+ 		cancel_work_sync(&amd_manager->amd_sdw_work);
++		cancel_work_sync(&amd_manager->resume_poll_work);
+ 		amd_sdw_wake_enable(amd_manager, false);
+ 		if (amd_manager->acp_rev >= ACP70_PCI_REV_ID) {
+ 			ret = amd_sdw_host_wake_enable(amd_manager, false);
+@@ -1443,10 +1494,19 @@ static int __maybe_unused amd_resume_runtime(struct device *dev)
+ 			usleep_range(500, 750);
+ 		}
+ 
+-		if (amd_manager->status[0] == SDW_SLAVE_ATTACHED)
++		if (amd_manager->status[0] == SDW_SLAVE_ATTACHED) {
+ 			schedule_work(&amd_manager->amd_sdw_work);
+-		else
+-			dev_err(amd_manager->dev, "No devices attached after resume timeout\n");
++		} else {
++			/*
++			 * Slaves are not back within the short inline window. Do not
++			 * give up here: continue polling from a worker. Abandoning the
++			 * re-enumeration leaves the bus dead for the rest of the
++			 * session, which is what makes audio unrecoverable until reboot.
++			 */
++			dev_info(amd_manager->dev,
++				"Devices not detected after resume, polling in background\n");
++			schedule_work(&amd_manager->resume_poll_work);
++		}
+ 	}
+ 	if (amd_manager->acp_rev >= ACP70_PCI_REV_ID) {
+ 		ret = amd_sdw_set_device_state(amd_manager, AMD_SDW_DEVICE_STATE_D0);
+diff --git a/include/linux/soundwire/sdw_amd.h b/include/linux/soundwire/sdw_amd.h
+index 470360a27..cf5da24e8 100644
+--- a/include/linux/soundwire/sdw_amd.h
++++ b/include/linux/soundwire/sdw_amd.h
+@@ -87,6 +87,8 @@ struct amd_sdw_manager {
+ 
+ 	struct work_struct amd_sdw_irq_thread;
+ 	struct work_struct amd_sdw_work;
++	/* slow SoundWire slave re-attach after a power-off resume */
++	struct work_struct resume_poll_work;
+ 	/* mutex to protect acp common register access */
+ 	struct mutex *acp_sdw_lock;
+ 
+-- 
+2.56.0
+

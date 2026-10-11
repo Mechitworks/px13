@@ -1,0 +1,227 @@
+From 2ece52e1826fa374246ba97661226f54cd028fad Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:44:26 +0200
+Subject: [PATCH 16/19] ASoC: rt721-sdca, tas2783: defer power-off resume to a
+ worker (rebased for 7.2.9: uses sdw_slave_wait_for_init())
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ sound/soc/codecs/rt721-sdca-sdw.c | 54 ++++++++++++++++++++++++++-----
+ sound/soc/codecs/rt721-sdca.c     |  1 +
+ sound/soc/codecs/rt721-sdca.h     |  2 ++
+ sound/soc/codecs/tas2783-sdw.c    | 47 +++++++++++++++++++++++++++
+ 4 files changed, 96 insertions(+), 8 deletions(-)
+
+diff --git a/sound/soc/codecs/rt721-sdca-sdw.c b/sound/soc/codecs/rt721-sdca-sdw.c
+index 7f6b99e82..925cf8b1b 100644
+--- a/sound/soc/codecs/rt721-sdca-sdw.c
++++ b/sound/soc/codecs/rt721-sdca-sdw.c
+@@ -434,6 +434,7 @@ static void rt721_sdca_sdw_remove(struct sdw_slave *slave)
+ 		cancel_delayed_work_sync(&rt721->jack_detect_work);
+ 		cancel_delayed_work_sync(&rt721->jack_btn_check_work);
+ 	}
++	cancel_work_sync(&rt721->resume_attach_work);
+ 
+ 	if (rt721->first_hw_init)
+ 		pm_runtime_disable(&slave->dev);
+@@ -457,6 +458,8 @@ static int rt721_sdca_dev_suspend(struct device *dev)
+ 
+ 	cancel_delayed_work_sync(&rt721->jack_detect_work);
+ 	cancel_delayed_work_sync(&rt721->jack_btn_check_work);
++	/* a pending resume worker would otherwise race this suspend */
++	cancel_work_sync(&rt721->resume_attach_work);
+ 
+ 	regcache_cache_only(rt721->regmap, true);
+ 	regcache_cache_only(rt721->mbq_regmap, true);
+@@ -496,6 +499,33 @@ static int rt721_sdca_dev_system_suspend(struct device *dev)
+ 
+ #define RT721_PROBE_TIMEOUT 5000
+ 
++/*
++ * Slow resume path worker (power-off re-attach). Runs in process context after
++ * dev_resume has already returned, so it may block on the bus re-enumeration
++ * without stalling the dpm_resume barrier. While this is pending the device is
++ * reported "resumed" to PM but the regmap stays cache-only, so audio that
++ * starts in this window may error/retry until the sync below completes.
++ */
++void rt721_sdca_resume_attach_handler(struct work_struct *work)
++{
++	struct rt721_sdca_priv *rt721 =
++		container_of(work, struct rt721_sdca_priv, resume_attach_work);
++	struct sdw_slave *slave = rt721->slave;
++	int ret;
++
++	ret = sdw_slave_wait_for_init(slave, RT721_PROBE_TIMEOUT);
++	if (ret) {
++		dev_err(&slave->dev, "resume: initialization timed out\n");
++		sdw_show_ping_status(slave->bus, true);
++		return;
++	}
++
++	regcache_cache_only(rt721->regmap, false);
++	regcache_sync(rt721->regmap);
++	regcache_cache_only(rt721->mbq_regmap, false);
++	regcache_sync(rt721->mbq_regmap);
++}
++
+ static int rt721_sdca_dev_resume(struct device *dev)
+ {
+ 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
+@@ -505,16 +535,24 @@ static int rt721_sdca_dev_resume(struct device *dev)
+ 	if (!rt721->first_hw_init)
+ 		return 0;
+ 
+-	if (!slave->unattach_request) {
+-		mutex_lock(&rt721->disable_irq_lock);
+-		if (rt721->disable_irq == true) {
+-			sdw_write_no_pm(slave, SDW_SCP_SDCA_INTMASK1, SDW_SCP_SDCA_INTMASK_SDCA_0);
+-			sdw_write_no_pm(slave, SDW_SCP_SDCA_INTMASK2, SDW_SCP_SDCA_INTMASK_SDCA_8);
+-			rt721->disable_irq = false;
+-		}
+-		mutex_unlock(&rt721->disable_irq_lock);
++	if (slave->unattach_request) {
++		/*
++		 * Defer the bus re-enumeration wait + regcache sync to a worker
++		 * and return immediately so the dpm_resume barrier (and thus the
++		 * desktop thaw) is not blocked for the full bring-up time.
++		 */
++		schedule_work(&rt721->resume_attach_work);
++		return 0;
+ 	}
+ 
++	mutex_lock(&rt721->disable_irq_lock);
++	if (rt721->disable_irq == true) {
++		sdw_write_no_pm(slave, SDW_SCP_SDCA_INTMASK1, SDW_SCP_SDCA_INTMASK_SDCA_0);
++		sdw_write_no_pm(slave, SDW_SCP_SDCA_INTMASK2, SDW_SCP_SDCA_INTMASK_SDCA_8);
++		rt721->disable_irq = false;
++	}
++	mutex_unlock(&rt721->disable_irq_lock);
++
+ 	ret = sdw_slave_wait_for_init(slave, RT721_PROBE_TIMEOUT);
+ 	if (ret) {
+ 		sdw_show_ping_status(slave->bus, true);
+diff --git a/sound/soc/codecs/rt721-sdca.c b/sound/soc/codecs/rt721-sdca.c
+index eae7d2f2f..ace51f992 100644
+--- a/sound/soc/codecs/rt721-sdca.c
++++ b/sound/soc/codecs/rt721-sdca.c
+@@ -1488,6 +1488,7 @@ int rt721_sdca_init(struct device *dev, struct regmap *regmap,
+ 
+ 	INIT_DELAYED_WORK(&rt721->jack_detect_work, rt721_sdca_jack_detect_handler);
+ 	INIT_DELAYED_WORK(&rt721->jack_btn_check_work, rt721_sdca_btn_check_handler);
++	INIT_WORK(&rt721->resume_attach_work, rt721_sdca_resume_attach_handler);
+ 
+ 	/*
+ 	 * Mark hw_init to false
+diff --git a/sound/soc/codecs/rt721-sdca.h b/sound/soc/codecs/rt721-sdca.h
+index 24ce18856..0c670a9e5 100644
+--- a/sound/soc/codecs/rt721-sdca.h
++++ b/sound/soc/codecs/rt721-sdca.h
+@@ -32,6 +32,7 @@ struct  rt721_sdca_priv {
+ 	struct snd_soc_jack *hs_jack;
+ 	struct delayed_work jack_detect_work;
+ 	struct delayed_work jack_btn_check_work;
++	struct work_struct resume_attach_work;
+ 	int jack_type;
+ 	int jd_src;
+ 	bool fu0f_dapm_mute;
+@@ -271,4 +272,5 @@ enum {
+ int rt721_sdca_io_init(struct device *dev, struct sdw_slave *slave);
+ int rt721_sdca_init(struct device *dev, struct regmap *regmap,
+ 			struct regmap *mbq_regmap, struct sdw_slave *slave);
++void rt721_sdca_resume_attach_handler(struct work_struct *work);
+ #endif /* __RT721_H__ */
+diff --git a/sound/soc/codecs/tas2783-sdw.c b/sound/soc/codecs/tas2783-sdw.c
+index fd5fca5f1..e02f8d16f 100644
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -99,6 +99,8 @@ struct tas2783_prv {
+ 	bool fw_dl_success;
+ 	/* use fallback fw name */
+ 	bool fw_use_fallback;
++	/* deferred slow-path resume (power-off re-attach) */
++	struct work_struct resume_attach_work;
+ };
+ 
+ static const struct reg_default tas2783_reg_default[] = {
+@@ -1089,6 +1091,9 @@ static s32 tas2783_sdca_dev_suspend(struct device *dev)
+ 	if (!tas_dev->hw_init)
+ 		return 0;
+ 
++	/* a pending resume worker would otherwise race this suspend */
++	cancel_work_sync(&tas_dev->resume_attach_work);
++
+ 	regcache_cache_only(tas_dev->regmap, true);
+ 	return 0;
+ }
+@@ -1098,12 +1103,52 @@ static s32 tas2783_sdca_dev_system_suspend(struct device *dev)
+ 	return tas2783_sdca_dev_suspend(dev);
+ }
+ 
++/*
++ * Slow resume path worker (power-off re-attach). Runs in process context after
++ * dev_resume has already returned, so it may block on the bus re-enumeration
++ * without stalling the dpm_resume barrier. While this is pending the device is
++ * reported "resumed" to PM but the regmap stays cache-only, so audio that
++ * starts in this window may error/retry until the sync below completes.
++ */
++static void tas2783_resume_attach_handler(struct work_struct *work)
++{
++	struct tas2783_prv *tas_dev =
++		container_of(work, struct tas2783_prv, resume_attach_work);
++	struct sdw_slave *slave = tas_dev->sdw_peripheral;
++	int ret;
++
++	ret = sdw_slave_wait_for_init(slave, TAS2783_PROBE_TIMEOUT);
++	if (ret) {
++		dev_err(&slave->dev, "resume: initialization timed out\n");
++		sdw_show_ping_status(slave->bus, true);
++		return;
++	}
++
++	regcache_cache_only(tas_dev->regmap, false);
++	ret = regcache_sync(tas_dev->regmap);
++	if (ret) {
++		regcache_cache_only(tas_dev->regmap, true);
++		regcache_mark_dirty(tas_dev->regmap);
++		return;
++	}
++}
++
+ static s32 tas2783_sdca_dev_resume(struct device *dev)
+ {
+ 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
+ 	struct tas2783_prv *tas_dev = dev_get_drvdata(dev);
+ 	int ret;
+ 
++	if (slave->unattach_request) {
++		/*
++		 * Defer the bus re-enumeration wait + regcache sync to a worker
++		 * and return immediately so the dpm_resume barrier (and thus the
++		 * desktop thaw) is not blocked for the full bring-up time.
++		 */
++		schedule_work(&tas_dev->resume_attach_work);
++		return 0;
++	}
++
+ 	ret = sdw_slave_wait_for_init(slave, TAS2783_PROBE_TIMEOUT);
+ 	if (ret) {
+ 		sdw_show_ping_status(slave->bus, true);
+@@ -1398,6 +1443,7 @@ static s32 tas_sdw_probe(struct sdw_slave *peripheral,
+ 	mutex_init(&tas_dev->pde_lock);
+ 
+ 	init_waitqueue_head(&tas_dev->fw_wait);
++	INIT_WORK(&tas_dev->resume_attach_work, tas2783_resume_attach_handler);
+ 	dev_set_drvdata(dev, tas_dev);
+ 
+ 	ret = tas_sa_func_data_init(tas_dev);
+@@ -1423,6 +1469,7 @@ static void tas_sdw_remove(struct sdw_slave *peripheral)
+ 	struct tas2783_prv *tas_dev = dev_get_drvdata(&peripheral->dev);
+ 
+ 	pm_runtime_disable(tas_dev->dev);
++	cancel_work_sync(&tas_dev->resume_attach_work);
+ 	tas_remove(tas_dev);
+ 	mutex_destroy(&tas_dev->calib_lock);
+ 	mutex_destroy(&tas_dev->pde_lock);
+-- 
+2.56.0
+

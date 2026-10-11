@@ -1,0 +1,26 @@
+From a27e7adc2716e1067eeb38bbcb2348926986ae93 Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:41:47 +0200
+Subject: [PATCH 05/19] 
+ 0005-dev_set_drvdata-already-called-intas_sdw_probe.patch
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ sound/soc/codecs/tas2783-sdw.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/sound/soc/codecs/tas2783-sdw.c b/sound/soc/codecs/tas2783-sdw.c
+index c825b2d47..3da81c4f7 100644
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -998,7 +998,6 @@ static s32 tas_init(struct tas2783_prv *tas_dev)
+ {
+ 	s32 ret;
+ 
+-	dev_set_drvdata(tas_dev->dev, tas_dev);
+ 	ret = devm_snd_soc_register_component(tas_dev->dev,
+ 					      &soc_codec_driver_tasdevice,
+ 					      tas_dai_driver,
+-- 
+2.56.0
+

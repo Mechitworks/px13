@@ -1,0 +1,112 @@
+From a8780bf10182102e9fcb8f273524136bbcb7d649 Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:43:34 +0200
+Subject: [PATCH 07/19] ALSA: tas2783-sdw: use ACPI AF01 initialization table
+ when no Smart Amp function is present
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ sound/soc/codecs/tas2783-sdw.c | 50 +++++++++++++++++++++++++++++++---
+ 1 file changed, 46 insertions(+), 4 deletions(-)
+
+diff --git a/sound/soc/codecs/tas2783-sdw.c b/sound/soc/codecs/tas2783-sdw.c
+index 2bf47e4b8..4be68aa2e 100644
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -14,6 +14,7 @@
+ 
+ #include <linux/unaligned.h>
+ #include <linux/crc32.h>
++#include <linux/acpi.h>
+ #include <linux/efi.h>
+ #include <linux/err.h>
+ #include <linux/firmware.h>
+@@ -22,6 +23,7 @@
+ #include <sound/pcm_params.h>
+ #include <linux/pm.h>
+ #include <linux/pm_runtime.h>
++#include <linux/property.h>
+ #include <linux/regmap.h>
+ #include <linux/wait.h>
+ #include <linux/soundwire/sdw.h>
+@@ -675,6 +677,8 @@ static s32 tas_sa_func_data_init(struct tas2783_prv *tas_dev)
+ {
+ 	struct device *dev = tas_dev->dev;
+ 	struct sdw_slave *peripheral = tas_dev->sdw_peripheral;
++	struct fwnode_handle *af01_node = NULL;
++	struct sdca_function_desc *desc = NULL;
+ 	struct sdca_function_data *function_data;
+ 	int i;
+ 
+@@ -683,19 +687,54 @@ static s32 tas_sa_func_data_init(struct tas2783_prv *tas_dev)
+ 		if (peripheral->sdca_data.function[i].type ==
+ 		    SDCA_FUNCTION_TYPE_SMART_AMP) {
+ 			dev_dbg(dev, "Found Smart Amp function at index %d", i);
++			desc = &peripheral->sdca_data.function[i];
+ 			break;
+ 		}
+ 	}
+ 
+-	if (i >= peripheral->sdca_data.num_functions)
+-		return 0;
++	if (!desc) {
++		/*
++		 * Some firmware exposes the Smart Amp initialization data on the
++		 * ACPI companion as a child node named "AF01" instead of as SDCA
++		 * function data on the SoundWire slave. Fall back to that node so
++		 * the initialization table is applied.
++		 */
++		dev_dbg(dev, "Missing Smart Amp function; checking AF01\n");
++
++		af01_node = device_get_named_child_node(dev, "AF01");
++		if (!af01_node) {
++			dev_dbg(dev, "AF01 node not found, using defaults\n");
++			return 0;
++		}
++
++		if (!fwnode_property_present(af01_node,
++					     "mipi-sdca-function-initialization-table")) {
++			dev_warn(dev, "AF01 found but missing init table, using defaults\n");
++			fwnode_handle_put(af01_node);
++			return 0;
++		}
++
++		desc = devm_kzalloc(dev, sizeof(*desc), GFP_KERNEL);
++		if (!desc) {
++			fwnode_handle_put(af01_node);
++			return dev_err_probe(dev, -ENOMEM,
++					     "failed to allocate sdca function desc");
++		}
++
++		desc->node = af01_node;
++		desc->type = SDCA_FUNCTION_TYPE_SMART_AMP;
++		desc->name = "tas-smart-amp";
++	}
+ 
+ 	function_data = devm_kzalloc(dev, sizeof(*function_data), GFP_KERNEL);
+-	if (!function_data)
++	if (!function_data) {
++		if (af01_node)
++			fwnode_handle_put(af01_node);
+ 		return dev_err_probe(dev, -ENOMEM,
+ 				     "failed to parse sdca functions");
++	}
+ 
+-	function_data->desc = &peripheral->sdca_data.function[i];
++	function_data->desc = desc;
+ 
+ 	/* Parse the function */
+ 	if (sdca_parse_function(dev, peripheral, function_data))
+@@ -703,6 +742,9 @@ static s32 tas_sa_func_data_init(struct tas2783_prv *tas_dev)
+ 	else
+ 		tas_dev->sa_func_data = function_data;
+ 
++	if (af01_node)
++		fwnode_handle_put(af01_node);
++
+ 	return 0;
+ }
+ 
+-- 
+2.56.0
+

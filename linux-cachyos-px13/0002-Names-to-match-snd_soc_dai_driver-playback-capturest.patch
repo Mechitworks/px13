@@ -1,0 +1,29 @@
+From 7e6eb0978950a44c1a4f4c69f2623b7e2e6865e9 Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:41:37 +0200
+Subject: [PATCH 02/19] 
+ 0002-Names-to-match-snd_soc_dai_driver-playback-capturest.patch
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ sound/soc/codecs/tas2783-sdw.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sound/soc/codecs/tas2783-sdw.c b/sound/soc/codecs/tas2783-sdw.c
+index 77ce6d42e..8dd9d12a3 100644
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -863,8 +863,8 @@ static s32 tas_fu23_event(struct snd_soc_dapm_widget *w,
+ }
+ 
+ static const struct snd_soc_dapm_widget tas_dapm_widgets[] = {
+-	SND_SOC_DAPM_AIF_IN("ASI", "ASI Playback", 0, SND_SOC_NOPM, 0, 0),
+-	SND_SOC_DAPM_AIF_OUT("ASI OUT", "ASI Capture", 0, SND_SOC_NOPM,
++	SND_SOC_DAPM_AIF_IN("ASI", "Playback", 0, SND_SOC_NOPM, 0, 0),
++	SND_SOC_DAPM_AIF_OUT("ASI OUT", "Capture", 0, SND_SOC_NOPM,
+ 			     0, 0),
+ 	SND_SOC_DAPM_DAC_E("FU21", NULL, SND_SOC_NOPM, 0, 0, tas_fu21_event,
+ 			   SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
+-- 
+2.56.0
+

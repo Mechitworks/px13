@@ -1,0 +1,31 @@
+From 7b8df4843a7c72b6f9dcda72f51c2f6aca1768e7 Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:41:37 +0200
+Subject: [PATCH 01/19] 
+ 0001-ALSA-tas2783-sdw-add-Playback-to-volume-control.patch
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ sound/soc/codecs/tas2783-sdw.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/sound/soc/codecs/tas2783-sdw.c b/sound/soc/codecs/tas2783-sdw.c
+index 4fbbf2ca5..77ce6d42e 100644
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -553,10 +553,10 @@ static s32 tas2783_amp_putvol(struct snd_kcontrol *kcontrol,
+ }
+ 
+ static const struct snd_kcontrol_new tas2783_snd_controls[] = {
+-	SOC_SINGLE_RANGE_EXT_TLV("Amp Volume", TAS2783_AMP_LEVEL,
++	SOC_SINGLE_RANGE_EXT_TLV("Amp Playback Volume", TAS2783_AMP_LEVEL,
+ 				 1, 0, 20, 0, tas2783_amp_getvol,
+ 				 tas2783_amp_putvol, tas2781_amp_tlv),
+-	SOC_SINGLE_RANGE_EXT_TLV("Speaker Volume", TAS2783_DVC_LVL,
++	SOC_SINGLE_RANGE_EXT_TLV("Speaker Playback Volume", TAS2783_DVC_LVL,
+ 				 0, 0, 200, 1, tas2783_digital_getvol,
+ 				 tas2783_digital_putvol, tas2781_dvc_tlv),
+ };
+-- 
+2.56.0
+

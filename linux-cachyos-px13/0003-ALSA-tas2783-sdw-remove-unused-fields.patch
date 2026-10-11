@@ -1,0 +1,66 @@
+From 4af17fcde77428cbd209df6d478cc0bc72ef695f Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:41:47 +0200
+Subject: [PATCH 03/19] ALSA: tas2783-sdw: remove unused fields (rebased for
+ 7.2.9: probe/remove hooks dropped entirely, upstream no longer registers the
+ misc device)
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ sound/soc/codecs/tas2783-sdw.c | 24 ------------------------
+ 1 file changed, 24 deletions(-)
+
+diff --git a/sound/soc/codecs/tas2783-sdw.c b/sound/soc/codecs/tas2783-sdw.c
+index 8dd9d12a3..80087ffc2 100644
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -79,7 +79,6 @@ struct calibration_data {
+ };
+ 
+ struct tas2783_prv {
+-	struct snd_soc_component *component;
+ 	struct calibration_data cali_data;
+ 	struct sdw_slave *sdw_peripheral;
+ 	struct sdca_function_data *sa_func_data;
+@@ -90,11 +89,7 @@ struct tas2783_prv {
+ 	struct mutex pde_lock;
+ 	struct regmap *regmap;
+ 	struct device *dev;
+-	struct class *class;
+-	struct attribute_group *cal_attr_groups;
+-	struct tm tm;
+ 	u8 rca_binaryname[64];
+-	u8 dev_name[32];
+ 	bool hw_init;
+ 	/* wq for firmware download */
+ 	wait_queue_head_t fw_wait;
+@@ -1014,26 +1009,7 @@ static struct snd_soc_dai_driver tas_dai_driver[] = {
+ 	},
+ };
+ 
+-static s32 tas_component_probe(struct snd_soc_component *component)
+-{
+-	struct tas2783_prv *tas_dev =
+-		snd_soc_component_get_drvdata(component);
+-
+-	tas_dev->component = component;
+-
+-	return 0;
+-}
+-
+-static void tas_component_remove(struct snd_soc_component *codec)
+-{
+-	struct tas2783_prv *tas_dev =
+-			snd_soc_component_get_drvdata(codec);
+-	tas_dev->component = NULL;
+-}
+-
+ static const struct snd_soc_component_driver soc_codec_driver_tasdevice = {
+-	.probe = tas_component_probe,
+-	.remove = tas_component_remove,
+ 	.controls = tas2783_snd_controls,
+ 	.num_controls = ARRAY_SIZE(tas2783_snd_controls),
+ 	.dapm_widgets = tas_dapm_widgets,
+-- 
+2.56.0
+

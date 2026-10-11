@@ -1,0 +1,123 @@
+From b8fb2472c6fe61c840547f8d851b0c511e651448 Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:43:34 +0200
+Subject: [PATCH 06/19] ALSA: tas2783-sdw: refactor Smart Amp SDCA function
+ lookup into tas_sa_func_data_init() (rebased for 7.2.9: sdca_parse_function()
+ is now 3-arg and takes function->desc)
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ sound/soc/codecs/tas2783-sdw.c | 76 ++++++++++++++++++----------------
+ 1 file changed, 41 insertions(+), 35 deletions(-)
+
+diff --git a/sound/soc/codecs/tas2783-sdw.c b/sound/soc/codecs/tas2783-sdw.c
+index 3da81c4f7..2bf47e4b8 100644
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -671,6 +671,41 @@ static s32 tas2783_update_calibdata(struct tas2783_prv *tas_dev)
+ 	return ret;
+ }
+ 
++static s32 tas_sa_func_data_init(struct tas2783_prv *tas_dev)
++{
++	struct device *dev = tas_dev->dev;
++	struct sdw_slave *peripheral = tas_dev->sdw_peripheral;
++	struct sdca_function_data *function_data;
++	int i;
++
++	/* Look for the Smart Amp function in the peripheral's SDCA data */
++	for (i = 0; i < peripheral->sdca_data.num_functions; i++) {
++		if (peripheral->sdca_data.function[i].type ==
++		    SDCA_FUNCTION_TYPE_SMART_AMP) {
++			dev_dbg(dev, "Found Smart Amp function at index %d", i);
++			break;
++		}
++	}
++
++	if (i >= peripheral->sdca_data.num_functions)
++		return 0;
++
++	function_data = devm_kzalloc(dev, sizeof(*function_data), GFP_KERNEL);
++	if (!function_data)
++		return dev_err_probe(dev, -ENOMEM,
++				     "failed to parse sdca functions");
++
++	function_data->desc = &peripheral->sdca_data.function[i];
++
++	/* Parse the function */
++	if (sdca_parse_function(dev, peripheral, function_data))
++		dev_warn(dev, "smartamp function parse failed, using defaults");
++	else
++		tas_dev->sa_func_data = function_data;
++
++	return 0;
++}
++
+ static s32 tas_fw_read_hdr(const u8 *data, struct tas_fw_hdr *hdr)
+ {
+ 	hdr->size = get_unaligned_le32(data);
+@@ -1259,8 +1294,7 @@ static s32 tas_sdw_probe(struct sdw_slave *peripheral,
+ 	struct regmap *regmap;
+ 	struct device *dev = &peripheral->dev;
+ 	struct tas2783_prv *tas_dev;
+-	struct sdca_function_data *function_data = NULL;
+-	int ret, i;
++	int ret;
+ 
+ 	ret = sdw_slave_read_prop(peripheral);
+ 	if (ret)
+@@ -1272,39 +1306,6 @@ static s32 tas_sdw_probe(struct sdw_slave *peripheral,
+ 		return dev_err_probe(dev, -ENOMEM,
+ 				     "Failed devm_kzalloc");
+ 
+-	i = -1;
+-	/* check if we have any SDCA function data available */
+-	if (peripheral->sdca_data.num_functions > 0) {
+-		dev_dbg(dev, "SDCA functions found: %d", peripheral->sdca_data.num_functions);
+-
+-		/* Look for Smart Amp function type */
+-		for (i = 0; i < peripheral->sdca_data.num_functions; i++) {
+-			if (peripheral->sdca_data.function[i].type ==
+-			    SDCA_FUNCTION_TYPE_SMART_AMP) {
+-				dev_info(dev, "Found Smart Amp function at index %d", i);
+-				break;
+-			}
+-		}
+-	}
+-
+-	if (i >= 0 && i < peripheral->sdca_data.num_functions) {
+-		/* Allocate memory for function data */
+-		function_data = devm_kzalloc(dev, sizeof(*function_data),
+-					     GFP_KERNEL);
+-		if (!function_data)
+-			return dev_err_probe(dev, -ENOMEM,
+-					     "failed to parse sdca functions");
+-
+-		function_data->desc = &peripheral->sdca_data.function[i];
+-
+-		/* Parse the function */
+-		ret = sdca_parse_function(dev, peripheral, function_data);
+-		if (!ret)
+-			tas_dev->sa_func_data = function_data;
+-		else
+-			dev_warn(dev, "smartamp function parse failed:err%d, using defaults", ret);
+-	}
+-
+ 	tas_dev->dev = dev;
+ 	tas_dev->sdw_peripheral = peripheral;
+ 	tas_dev->hw_init = false;
+@@ -1313,6 +1314,11 @@ static s32 tas_sdw_probe(struct sdw_slave *peripheral,
+ 
+ 	init_waitqueue_head(&tas_dev->fw_wait);
+ 	dev_set_drvdata(dev, tas_dev);
++
++	ret = tas_sa_func_data_init(tas_dev);
++	if (ret)
++		return ret;
++
+ 	regmap = devm_regmap_init_sdw_mbq_cfg(&peripheral->dev,
+ 					      peripheral,
+ 					      &tas_regmap,
+-- 
+2.56.0
+

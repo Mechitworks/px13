@@ -1,0 +1,60 @@
+From 994b8879741e0f8c3dbd34ce507e161bbd9ce562 Mon Sep 17 00:00:00 2001
+From: distsystem <dev@dist.systems>
+Date: Sat, 10 Oct 2026 16:41:47 +0200
+Subject: [PATCH 04/19] 
+ 0004-SOC_SINGLE_RANGE_TLV-uses-snd_soc_get_volsw-snd_soc_.patch
+
+Signed-off-by: distsystem <dev@dist.systems>
+---
+ sound/soc/codecs/tas2783-sdw.c | 34 ++++------------------------------
+ 1 file changed, 4 insertions(+), 30 deletions(-)
+
+diff --git a/sound/soc/codecs/tas2783-sdw.c b/sound/soc/codecs/tas2783-sdw.c
+index 80087ffc2..c825b2d47 100644
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -523,37 +523,11 @@ static const struct regmap_sdw_mbq_cfg tas2783_mbq_cfg = {
+ 	.mbq_size = tas2783_sdca_mbq_size,
+ };
+ 
+-static s32 tas2783_digital_getvol(struct snd_kcontrol *kcontrol,
+-				  struct snd_ctl_elem_value *ucontrol)
+-{
+-	return snd_soc_get_volsw(kcontrol, ucontrol);
+-}
+-
+-static s32 tas2783_digital_putvol(struct snd_kcontrol *kcontrol,
+-				  struct snd_ctl_elem_value *ucontrol)
+-{
+-	return snd_soc_put_volsw(kcontrol, ucontrol);
+-}
+-
+-static s32 tas2783_amp_getvol(struct snd_kcontrol *kcontrol,
+-			      struct snd_ctl_elem_value *ucontrol)
+-{
+-	return snd_soc_get_volsw(kcontrol, ucontrol);
+-}
+-
+-static s32 tas2783_amp_putvol(struct snd_kcontrol *kcontrol,
+-			      struct snd_ctl_elem_value *ucontrol)
+-{
+-	return snd_soc_put_volsw(kcontrol, ucontrol);
+-}
+-
+ static const struct snd_kcontrol_new tas2783_snd_controls[] = {
+-	SOC_SINGLE_RANGE_EXT_TLV("Amp Playback Volume", TAS2783_AMP_LEVEL,
+-				 1, 0, 20, 0, tas2783_amp_getvol,
+-				 tas2783_amp_putvol, tas2781_amp_tlv),
+-	SOC_SINGLE_RANGE_EXT_TLV("Speaker Playback Volume", TAS2783_DVC_LVL,
+-				 0, 0, 200, 1, tas2783_digital_getvol,
+-				 tas2783_digital_putvol, tas2781_dvc_tlv),
++	SOC_SINGLE_RANGE_TLV("Amp Playback Volume", TAS2783_AMP_LEVEL,
++				 1, 0, 20, 0, tas2781_amp_tlv),
++	SOC_SINGLE_RANGE_TLV("Speaker Playback Volume", TAS2783_DVC_LVL,
++				 0, 0, 200, 1, tas2781_dvc_tlv),
+ };
+ 
+ static s32 tas2783_validate_calibdata(struct tas2783_prv *tas_dev,
+-- 
+2.56.0
+
