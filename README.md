@@ -248,3 +248,8 @@ Patch 0019 follow-up: the background-poll message was `dev_dbg`, invisible in th
 journal, so a slow-path resume looked identical to a fast-path one. Changed to
 `dev_info` (commits `979d1ce` / `051a4fc`); series re-verified 19/19 clean. The
 installed `-test` packages predate that change.
+
+## Licenses
+
+See `LICENSES.md` — the repo mixes GPL-2.0-only (kernel fork + patches) and CC0-1.0
+(quirks package, helper scripts). No single top-level LICENSE applies.
